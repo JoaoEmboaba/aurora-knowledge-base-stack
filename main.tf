@@ -122,3 +122,86 @@ resource "aws_iam_role_policy" "lambda_policy" {
     ]
   })
 }
+
+resource "aws_iam_role" "i30-knowledge-base-execution-role" {
+  name = "i30-knowledge-base-execution-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "bedrock.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "i30-knowledge-base-policy" {
+  name = "i30-knowledge-base-policy"
+  role = aws_iam_role.i30-knowledge-base-execution-role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "bedrock:InvokeModel",
+          "secretsmanager:GetSecretValue",
+          "rds:DescribeDBClusters",
+          "rds-data:BatchExecuteStatement",
+          "rds-data:ExecuteStatement",
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:PutObject",
+        ]
+        Resource = "*"
+        Effect   = "Allow"
+      }
+    ]
+  })
+}
+
+resource "aws_bedrockagent_data_source" "i30-manual-instruction-datasource" {
+  knowledge_base_id = aws_bedrockagent_knowledge_base.i30-agent-knowledge-base.id
+  name              = "i30-manual-instruction-datasource"
+  data_source_configuration {
+    type = "S3"
+    s3_configuration {
+      bucket_arn = "arn:aws:s3:::bedrock-knowledge-base-instruction"
+    }
+  }
+}
+
+resource "aws_bedrockagent_knowledge_base" "i30-agent-knowledge-base" {
+  name     = "i30-agent-knowledge-base"
+  role_arn = aws_iam_role.i30-knowledge-base-execution-role.arn
+  knowledge_base_configuration {
+    vector_knowledge_base_configuration {
+      embedding_model_arn = "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0"
+
+      embedding_model_configuration {
+        bedrock_embedding_model_configuration {
+          dimensions = 1024
+          embedding_data_type = "FLOAT32"
+        }
+      }
+    }
+    type = "VECTOR"
+  }
+  storage_configuration {
+    type = "RDS"
+    rds_configuration {
+      credentials_secret_arn = aws_rds_cluster.aurora-knowledge-base.master_user_secret[0].secret_arn
+      database_name          = "postgres"
+      field_mapping {
+        primary_key_field = "id"
+        text_field        = "chunks"
+        vector_field      = "embedding"
+        metadata_field    = "metadata"
+      }
+      resource_arn = aws_rds_cluster.aurora-knowledge-base.arn
+      table_name   = "bedrock_kb"
+    }
+  }
+}
+
